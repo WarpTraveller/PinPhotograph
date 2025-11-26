@@ -86,6 +86,15 @@
         .controls-scroll::-webkit-scrollbar { width: 4px; }
         .controls-scroll::-webkit-scrollbar-thumb { background-color: #555; border-radius: 4px; }
 
+        /* Prevent horizontal scrollbar / phantom bar in image list; always show vertical bar */
+        #image-list-container { overflow-x: hidden; overflow-y: scroll; }
+        /* Style vertical scrollbar for image list to match dark theme */
+        #image-list-container::-webkit-scrollbar { width: 8px; height: 0px; }
+        #image-list-container::-webkit-scrollbar-track { background: transparent; }
+        #image-list-container::-webkit-scrollbar-thumb { background: #555; border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+        /* Firefox */
+        #image-list-container { scrollbar-width: thin; scrollbar-color: #3a3a45 transparent; }
+
         .btn-ripple { position: relative; overflow: hidden; transform: translate3d(0, 0, 0); }
         .btn-ripple:after {
             content: ""; display: block; position: absolute; width: 100%; height: 100%; top: 0; left: 0;
@@ -134,6 +143,20 @@
         .draggable-item.dragging { opacity: 0.5; cursor: grabbing; z-index: 50; box-shadow: 0 10px 20px rgba(0,0,0,0.5); transform: scale(1.02); }
         .drag-placeholder { border: 2px dashed #555; background: rgba(255,255,255,0.05); border-radius: 0.5rem; height: 58px; margin-bottom: 0.5rem; }
 
+        /* Insert Indicator for sortable list */
+        #insert-indicator {
+            position: absolute;
+            height: 3px;              /* white insertion line thickness */
+            background: #ffffff;
+            left: 8px;
+            right: 8px;
+            display: none;
+            z-index: 9999;
+            box-shadow: 0 0 6px rgba(255,255,255,0.6);
+            border-radius: 2px;
+            pointer-events: none;
+        }
+
         /* Custom Color Picker Modal */
         #color-picker-modal {
             backdrop-filter: blur(10px);
@@ -177,7 +200,7 @@
             <button id="btn-select-images" class="btn-ripple bg-[#29499d] text-white text-xl font-medium py-4 px-12 rounded-full shadow-lg w-64 hover:bg-[#345ac5] transition-colors">
                 选择图片
             </button>
-            <p class="text-gray-400 text-sm">请选择 2 到 6 张图片</p>
+            <p class="text-gray-400 text-sm">请选择 1 到 6 张图片</p>
         </div>
         
         <!-- Hidden Inputs -->
@@ -215,6 +238,7 @@
 
                     <!-- Image List (Sortable) -->
                     <div id="image-list-container" class="space-y-2 max-h-48 overflow-y-auto pr-1 controls-scroll relative">
+                        <div id="insert-indicator" aria-hidden="true"></div>
                         <div class="text-center text-xs text-gray-500 py-2">暂无图片</div>
                     </div>
                     <div class="text-[10px] text-gray-500 mt-2 text-center">长按并拖动图片可调整顺序</div>
@@ -422,7 +446,7 @@
 
     <!-- Toast Notification -->
     <div id="toast" class="fixed bottom-32 left-1/2 transform -translate-x-1/2 bg-[#333] text-white px-6 py-3 rounded-full shadow-2xl opacity-0 transition-opacity pointer-events-none z-[70] text-sm border border-[#555] flex items-center space-x-2">
-        <svg class="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+        <span id="toast-icon" class="inline-block w-5 h-5"></span>
         <span id="toast-msg">操作成功</span>
     </div>
 
@@ -553,6 +577,7 @@
         loading: document.getElementById('loading-indicator'),
         imgCount: document.getElementById('img-count'),
         imageListContainer: document.getElementById('image-list-container')
+        ,insertIndicator: document.getElementById('insert-indicator')
     };
 
     // --- Initialization ---
@@ -616,20 +641,30 @@
     }
 
     function updateColorUI(hex) {
+        if (!hex) return;
+        // Normalize hex to form #RRGGBB
+        if (!hex.startsWith('#')) hex = '#' + hex;
+        hex = hex.toUpperCase();
+
         appState.solidColor = hex;
         inputs.colorPreview.style.backgroundColor = hex;
         inputs.colorHexInput.value = hex.replace('#', '').toUpperCase();
-        
+
+        // Update presets' active state
         inputs.presets.forEach(p => {
-            if (p.dataset.color.toLowerCase() === hex.toLowerCase()) {
+            if (p.dataset.color.toUpperCase() === hex) {
                 p.classList.add('active');
-                p.style.borderColor = (hex.toLowerCase() === '#ffffff') ? '#ccc' : hex;
+                p.style.borderColor = (hex === '#FFFFFF') ? '#ccc' : hex;
             } else {
                 p.classList.remove('active');
                 p.style.borderColor = 'transparent';
-                if(p.dataset.color.toLowerCase() === '#ffffff') p.style.border = '1px solid #555';
+                if (p.dataset.color.toUpperCase() === '#FFFFFF') p.style.border = '1px solid #555';
             }
         });
+
+        // Persist and re-render immediately
+        saveSettings();
+        requestRender();
     }
 
     // --- Custom Color Picker Logic ---
@@ -656,10 +691,18 @@
         }
 
         function hexToHsv(hex) {
-            hex = hex.replace('#', '');
-            let r = parseInt(hex.substring(0,2), 16) / 255;
-            let g = parseInt(hex.substring(2,4), 16) / 255;
-            let b = parseInt(hex.substring(4,6), 16) / 255;
+            hex = (hex || '').replace('#', '').trim();
+            // support 3-digit hex like 'f00'
+            if (hex.length === 3) {
+                hex = hex.split('').map(ch => ch + ch).join('');
+            }
+            if (hex.length !== 6) {
+                // fallback to red
+                hex = 'FF0000';
+            }
+            let r = parseInt(hex.substring(0,2), 16) / 255 || 0;
+            let g = parseInt(hex.substring(2,4), 16) / 255 || 0;
+            let b = parseInt(hex.substring(4,6), 16) / 255 || 0;
             let max = Math.max(r,g,b), min = Math.min(r,g,b);
             let h, s, v = max;
             let d = max - min;
@@ -673,12 +716,19 @@
                 }
                 h /= 6;
             }
-            return { h: h*360, s: s*100, v: v*100 };
+            return { h: Number.isFinite(h) ? h*360 : 0, s: Number.isFinite(s) ? s*100 : 0, v: Number.isFinite(v) ? v*100 : 100 };
         }
 
         function updatePickerVisuals() {
             // Update SV Box Background based on Hue
+            // clamp cpState
+            cpState.hue = Math.max(0, Math.min(360, Number(cpState.hue) || 0));
+            cpState.sat = Math.max(0, Math.min(100, Number(cpState.sat) || 100));
+            cpState.val = Math.max(0, Math.min(100, Number(cpState.val) || 100));
+
             inputs.pickerSvBox.style.background = `linear-gradient(to bottom, transparent, #000), linear-gradient(to right, #fff, hsl(${cpState.hue}, 100%, 50%))`;
+            // Fallback: set colored outline so user sees hue even if gradient fails
+            try { inputs.pickerSvBox.style.outline = `2px solid ${hsvToHex(cpState.hue,100,50)}`; } catch (e) {}
             
             // Move Thumbs
             inputs.pickerHueThumb.style.left = `${(cpState.hue / 360) * 100}%`;
@@ -687,6 +737,36 @@
             
             // Check brightness for thumb border
             inputs.pickerSvThumb.style.borderColor = cpState.val < 50 ? 'white' : 'black';
+        }
+
+        // Read current picker UI state (thumb positions) back into cpState
+        function readPickerStateFromUI() {
+            try {
+                const hueLeft = inputs.pickerHueThumb.style.left || getComputedStyle(inputs.pickerHueThumb).left || '0%';
+                const svLeft = inputs.pickerSvThumb.style.left || getComputedStyle(inputs.pickerSvThumb).left || '0%';
+                const svTop = inputs.pickerSvThumb.style.top || getComputedStyle(inputs.pickerSvThumb).top || '0%';
+
+                // helper to parse percent or px
+                const parsePercent = (val, parentSize) => {
+                    if (!val) return 0;
+                    if (val.endsWith('%')) return parseFloat(val);
+                    // px value -> convert to percent relative to parent
+                    return (parseFloat(val) / parentSize) * 100;
+                };
+
+                const hueParentW = inputs.pickerHueSlider.getBoundingClientRect().width;
+                const svParent = inputs.pickerSvBox.getBoundingClientRect();
+
+                const huePct = parsePercent(hueLeft, hueParentW);
+                const satPct = parsePercent(svLeft, svParent.width);
+                const valPct = 100 - parsePercent(svTop, svParent.height);
+
+                cpState.hue = Math.max(0, Math.min(360, (huePct / 100) * 360));
+                cpState.sat = Math.max(0, Math.min(100, satPct));
+                cpState.val = Math.max(0, Math.min(100, valPct));
+            } catch (err) {
+                // fallback: keep existing cpState
+            }
         }
 
         function handleSvInput(e) {
@@ -711,15 +791,28 @@
         }
 
         inputs.btnOpenPicker.addEventListener('click', () => {
-            cpState = hexToHsv(appState.solidColor);
+            // Compute picker state from current solid color, with fallback
+            try {
+                const baseHex = appState.solidColor || (inputs.colorPreview.style.backgroundColor ? inputs.colorPreview.style.backgroundColor : '#FF0000');
+                cpState = hexToHsv(baseHex);
+            } catch (err) {
+                cpState = { hue: 0, sat: 100, val: 100 };
+            }
+            // Ensure numeric valid values
+            cpState.hue = (typeof cpState.hue === 'number' && isFinite(cpState.hue)) ? cpState.hue : 0;
+            cpState.sat = (typeof cpState.sat === 'number' && isFinite(cpState.sat)) ? cpState.sat : 100;
+            cpState.val = (typeof cpState.val === 'number' && isFinite(cpState.val)) ? cpState.val : 100;
             updatePickerVisuals();
             inputs.pickerModal.classList.remove('hidden');
         });
 
         inputs.pickerConfirm.addEventListener('click', () => {
+            // Ensure cpState reflects current UI positions (cover lost events)
+            readPickerStateFromUI();
             const hex = hsvToHex(cpState.hue, cpState.sat, cpState.val);
             updateColorUI(hex);
             requestRender();
+            saveSettings();
             inputs.pickerModal.classList.add('hidden');
         });
 
@@ -868,6 +961,18 @@
                 saveSettings();
             });
         }
+
+        // Hide insert indicator when leaving the list area
+        inputs.imageListContainer.addEventListener('dragleave', (e) => {
+            // Only hide when truly leaving the container
+            const related = e.relatedTarget;
+            if (!related || !inputs.imageListContainer.contains(related)) hideInsertIndicator();
+        });
+
+        inputs.imageListContainer.addEventListener('dragenter', (e) => {
+            // ensure indicator exists
+            // no-op, placeholder to ensure drag events fire on container
+        });
     }
 
     function updateModeUI(mode) {
@@ -901,10 +1006,27 @@
 
     function renderImageList() {
         const container = inputs.imageListContainer;
+        // Clear list but preserve or recreate the insert indicator element
         container.innerHTML = '';
 
+        // Remove any leftover placeholder nodes that might show as a gray box
+        cleanupPlaceholders();
+
+        // Ensure insert indicator exists and is attached
+        let indicator = inputs.insertIndicator;
+        if (!indicator || !document.body.contains(indicator)) {
+            indicator = document.createElement('div');
+            indicator.id = 'insert-indicator';
+            indicator.setAttribute('aria-hidden', 'true');
+            inputs.insertIndicator = indicator;
+        }
+        container.appendChild(indicator);
+
         if (originalImageObjects.length === 0) {
-            container.innerHTML = '<div class="text-center text-xs text-gray-500 py-2">暂无图片</div>';
+            const empty = document.createElement('div');
+            empty.className = 'text-center text-xs text-gray-500 py-2';
+            empty.textContent = '暂无图片';
+            container.appendChild(empty);
             return;
         }
 
@@ -943,6 +1065,18 @@
             // Bind Drag Events
             addDragListeners(div);
         });
+
+        // After rendering, remove any unexpected nodes (defensive cleanup)
+        Array.from(container.children).forEach(child => {
+            if (child === inputs.insertIndicator) return;
+            if (child.classList && child.classList.contains('draggable-item')) return;
+            // allow the empty message only when there are no items
+            if (child.classList && child.classList.contains('text-center')) {
+                if (originalImageObjects.length === 0) return;
+            }
+            // remove any other stray element (this removes the gray phantom)
+            child.remove();
+        });
     }
 
     // --- Simple Drag and Drop Implementation ---
@@ -969,25 +1103,84 @@
         e.dataTransfer.effectAllowed = 'move';
         e.dataTransfer.setData('text/html', this.innerHTML);
         this.classList.add('dragging');
+        // Remove default drag ghost by using a transparent image
+        try {
+            const emptyImg = new Image();
+            emptyImg.src = 'data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>';
+            e.dataTransfer.setDragImage(emptyImg, 0, 0);
+        } catch (err) {
+            // ignore if setDragImage not allowed
+        }
+        // ensure no stray placeholders remain when starting
+        cleanupPlaceholders();
+    }
+
+    // Helper to show/hide the insert indicator
+    function showInsertIndicatorAt(topPx) {
+        if (!inputs.insertIndicator) return;
+        inputs.insertIndicator.style.top = `${topPx}px`;
+        inputs.insertIndicator.style.display = 'block';
+    }
+    function hideInsertIndicator() {
+        if (!inputs.insertIndicator) return;
+        inputs.insertIndicator.style.display = 'none';
+    }
+
+    // Remove stray placeholder or ghost elements that could appear during drag
+    function cleanupPlaceholders() {
+        const container = inputs.imageListContainer;
+        if (!container) return;
+        // Remove elements matching common placeholder class names
+        const selectors = ['.drag-placeholder', '.placeholder', '.__dragghost', '.ghost', '.drop-placeholder'];
+        selectors.forEach(sel => {
+            const nodes = container.querySelectorAll(sel);
+            nodes.forEach(n => n.remove());
+        });
+        // Also remove any direct child with the small gray background we used for empty message accidentally left
+        Array.from(container.children).forEach(child => {
+            if (child.classList && child.classList.contains('text-center') && child.textContent.trim() === '暂无图片') {
+                // only keep when there are actually no images; otherwise remove
+                if (originalImageObjects.length > 0) child.remove();
+            }
+        });
     }
 
     function handleDragOver(e) {
         if (e.preventDefault) e.preventDefault();
+        // Use offsetTop/offsetHeight to compute position relative to container content (handles scrolling)
+        const container = inputs.imageListContainer;
+        const target = this; // current .draggable-item
+        const targetMid = target.offsetTop + target.offsetHeight / 2;
+        // compute cursor Y relative to container content top
+        const cursorYContent = (e.clientY - container.getBoundingClientRect().top) + container.scrollTop;
+        const insertTop = (cursorYContent < targetMid) ? target.offsetTop : (target.offsetTop + target.offsetHeight);
+        showInsertIndicatorAt(insertTop);
         return false;
     }
 
     function handleDrop(e) {
         e.stopPropagation();
+        hideInsertIndicator();
+        cleanupPlaceholders();
         if (dragSrcEl !== this) {
             const oldIdx = parseInt(dragSrcEl.dataset.index);
-            const newIdx = parseInt(this.dataset.index);
-            moveImage(oldIdx, newIdx);
+            const targetIdx = parseInt(this.dataset.index);
+            const container = inputs.imageListContainer;
+            const targetEl = this;
+            const targetMid = targetEl.offsetTop + targetEl.offsetHeight / 2;
+            const cursorYContent = (e.clientY - container.getBoundingClientRect().top) + container.scrollTop;
+            let insertIndex = (cursorYContent < targetMid) ? targetIdx : targetIdx + 1;
+            // Adjust insert index when removing earlier element
+            if (insertIndex > oldIdx) insertIndex--;
+            moveImage(oldIdx, insertIndex);
         }
         return false;
     }
 
     function handleDragEnd(e) {
         this.classList.remove('dragging');
+        hideInsertIndicator();
+        cleanupPlaceholders();
     }
 
     // Mobile Touch Drag (Simplified)
@@ -1015,11 +1208,16 @@
         const elementBelow = document.elementFromPoint(touchLocation.clientX, touchLocation.clientY);
         const droppableBelow = elementBelow?.closest('.draggable-item');
 
-        if (droppableBelow && droppableBelow !== touchCurrentEl) {
-             // Visual feedback could go here, but for simplicity we just swap on end or rely on drop logic
-             // For true sortable list on mobile, we swap data immediately or visual placeholders. 
-             // Here we stick to simple logic: detect where we end.
-        }
+           if (droppableBelow) {
+               const container = inputs.imageListContainer;
+               const targetMid = droppableBelow.offsetTop + droppableBelow.offsetHeight / 2;
+               const cursorYContent = (touchLocation.clientY - container.getBoundingClientRect().top) + container.scrollTop;
+               const insertTop = (cursorYContent < targetMid) ? droppableBelow.offsetTop : (droppableBelow.offsetTop + droppableBelow.offsetHeight);
+               showInsertIndicatorAt(insertTop);
+           } else {
+               // If not over any item, show at the bottom of list
+               showInsertIndicatorAt(inputs.imageListContainer.scrollHeight - 4);
+           }
     }
 
     function handleTouchEnd(e) {
@@ -1031,9 +1229,16 @@
 
         if (droppableBelow && droppableBelow !== touchCurrentEl) {
             const oldIdx = parseInt(touchCurrentEl.dataset.index);
-            const newIdx = parseInt(droppableBelow.dataset.index);
-            moveImage(oldIdx, newIdx);
+            const targetIdx = parseInt(droppableBelow.dataset.index);
+            const targetRect = droppableBelow.getBoundingClientRect();
+            const mid = (targetRect.top + targetRect.bottom) / 2;
+            let insertIndex = (touchLocation.clientY < mid) ? targetIdx : targetIdx + 1;
+            if (insertIndex > oldIdx) insertIndex--;
+            moveImage(oldIdx, insertIndex);
         }
+
+        hideInsertIndicator();
+        cleanupPlaceholders();
 
         touchCurrentEl.classList.remove('dragging');
         touchCurrentEl = null;
@@ -1047,8 +1252,8 @@
     }
 
     function removeImage(index) {
-        if (originalImageObjects.length <= 2) {
-            showToast("至少需要保留 2 张图片", true);
+        if (originalImageObjects.length <= 1) {
+            showToast("至少需要保留 1 张图片", true);
             return;
         }
         originalImageObjects.splice(index, 1);
@@ -1074,8 +1279,11 @@
         // LOGIC UPDATE: Outer Border Toggle
         let totalBordersHeight;
         let finalWidth;
-        
-        if (appState.outerBorder) {
+
+        // Force outer border when there's only one image (ensure four-side border)
+        const outerActive = (originalImageObjects.length === 1) ? true : appState.outerBorder;
+
+        if (outerActive) {
             // Padding around everything + gaps
             totalBordersHeight = borderWidth * (selectedImages.length + 1);
             finalWidth = maxImageWidth + (borderWidth * 2);
@@ -1109,10 +1317,10 @@
         const files = Array.from(e.target.files);
         if (files.length === 0) return;
         
-        if (isReplace && files.length < 2) {
-             showToast('请至少选择 2 张图片', true);
-             return;
-        }
+           if (isReplace && files.length < 1) {
+               showToast('请至少选择 1 张图片', true);
+               return;
+           }
 
         toggleLoading(true);
 
@@ -1245,6 +1453,9 @@
         // Logic Update: If outerBorder is FALSE, background is only visible in gaps.
         // However, canvas size matches content, so background is simply drawn behind.
         
+        // Outer active when single image is selected
+        const outerActive = (originalImageObjects.length === 1) ? true : appState.outerBorder;
+
         if (appState.mode === 'solid') {
             ctx.fillStyle = appState.solidColor;
             ctx.fillRect(0, 0, finalWidth, finalHeight);
@@ -1317,7 +1528,7 @@
         let currentY;
         let xPos;
         
-        if (appState.outerBorder) {
+        if (outerActive) {
             currentY = borderWidth;
             xPos = borderWidth;
         } else {
@@ -1374,12 +1585,20 @@
     function showToast(msg, isError = false) {
         const toast = document.getElementById('toast');
         document.getElementById('toast-msg').innerText = msg;
+        const ico = document.getElementById('toast-icon');
         if (isError) {
-            toast.querySelector('svg').classList.remove('text-green-400');
-            toast.querySelector('svg').classList.add('text-red-400');
+            // red cross
+            ico.innerHTML = `
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" class="w-5 h-5">
+                  <path d="M6 6L18 18" stroke="#e53935" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                  <path d="M6 18L18 6" stroke="#e53935" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>`;
         } else {
-            toast.querySelector('svg').classList.add('text-green-400');
-            toast.querySelector('svg').classList.remove('text-red-400');
+            // success check
+            ico.innerHTML = `
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" class="w-5 h-5">
+                  <path d="M5 13l4 4L19 7" stroke="#4CAF50" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>`;
         }
 
         toast.style.opacity = '1';

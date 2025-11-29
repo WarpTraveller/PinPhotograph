@@ -803,7 +803,7 @@
     </div>
 
     <!-- Global Loading Indicator -->
-    <div id="loading-indicator" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.8); z-index: 2147483647; flex-direction: column; align-items: center; justify-content: center; color: white;">
+    <div id="loading-indicator" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.2); backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); z-index: 2147483647; flex-direction: column; align-items: center; justify-content: center; color: white;">
         <div class="loader-dots" style="display: flex; gap: 8px; margin-bottom: 24px;">
             <div class="loader-dot" style="width: 12px; height: 12px; border-radius: 50%; background-color: #29499d; animation: bounce 0.6s infinite alternate;"></div>
             <div class="loader-dot" style="width: 12px; height: 12px; border-radius: 50%; background-color: #4c6ef5; animation: bounce 0.6s infinite alternate; animation-delay: 0.2s;"></div>
@@ -843,13 +843,13 @@
         posY: 0,
         bgBlendMode: 'screen',
         exportQuality: 95,
-        exportScale: 10,
+        exportScale: 50,
         shadow: { enabled: false, blur: 20, distance: 10, angle: 45, size: 0, opacity: 0.5, color: '#000000' }
     };
 
     let appState = JSON.parse(localStorage.getItem('pinphotograph_settings')) || { ...defaultState };
     // Ensure default scale is 10 if not set or if it was the old default 100 (optional, but safer to just respect saved or default)
-    if (appState.exportScale === undefined) appState.exportScale = 10;
+    if (appState.exportScale === undefined) appState.exportScale = 50;
     if (appState.scaleFree === undefined) appState.scaleFree = 100;
     if (appState.scaleStrip === undefined) appState.scaleStrip = 100;
     if(!appState.shadow) appState.shadow = { enabled: false, blur: 20, distance: 10, angle: 45, size: 0, opacity: 0.5, color: '#000000' }; // Migration
@@ -1964,6 +1964,28 @@
                 removeImage(index);
             };
 
+            const btnReplace = document.createElement('button');
+            btnReplace.className = 'p-2 rounded text-gray-400 hover:text-white hover:bg-gray-700 cursor-pointer';
+            btnReplace.title = '替换图片';
+            btnReplace.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>`;
+            btnReplace.onclick = (e) => {
+                e.stopPropagation();
+                // Trigger hidden file input for replacement
+                // We'll use a temporary input or reuse addFile with a flag
+                // Let's create a temp one to avoid state mess
+                const tempInput = document.createElement('input');
+                tempInput.type = 'file';
+                tempInput.accept = 'image/*';
+                tempInput.onchange = (evt) => {
+                    const file = evt.target.files[0];
+                    if (file) {
+                        replaceImage(index, file);
+                    }
+                };
+                tempInput.click();
+            };
+
+            actionsDiv.appendChild(btnReplace);
             actionsDiv.appendChild(btnEdit);
             actionsDiv.appendChild(btnDel);
 
@@ -2167,6 +2189,52 @@
         }
         originalImageObjects.splice(index, 1);
         refreshAfterImageUpdate();
+    }
+
+    function replaceImage(index, file) {
+        if (index < 0 || index >= originalImageObjects.length) return;
+        
+        toggleLoading(true);
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const img = new Image();
+            img.onload = async () => {
+                const oldItem = originalImageObjects[index];
+                
+                // Create thumbnail
+                let thumb = null;
+                try {
+                    thumb = await createThumbnail(img);
+                } catch(err) {}
+
+                // Update object but keep edit/free properties
+                // Note: Dimensions change, so we might need to adjust free.w/h if we want to keep aspect ratio
+                // User said "position unchanged". We keep x,y.
+                // We should probably update w/h to match new aspect ratio but keep roughly same size?
+                // Or just reset w/h based on new image size?
+                // Let's try to maintain the width and adjust height to match new aspect ratio.
+                
+                const newRatio = img.height / img.width;
+                
+                if (oldItem.free) {
+                    // Keep width, adjust height
+                    oldItem.free.w = oldItem.free.w; 
+                    oldItem.free.h = oldItem.free.w * newRatio;
+                }
+
+                oldItem.img = img;
+                oldItem.width = img.width;
+                oldItem.height = img.height;
+                oldItem.thumbnail = thumb;
+                
+                // Refresh
+                refreshAfterImageUpdate();
+                toggleLoading(false);
+                showToast('图片已替换');
+            };
+            img.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
     }
 
     function refreshAfterImageUpdate() {
@@ -2615,25 +2683,26 @@
             if (activeImageIndex !== -1 && activeImageIndex < selectedImages.length) {
                 const img = selectedImages[activeImageIndex];
                 const f = img.free;
-                const handleSize = 60; // Logical pixels
+                const handleSize = 100; // Increased touch area for mobile
+                const touchPad = 50;    // Negative offset for easier grabbing
                 
                 // TL Resize
-                if (pos.x >= f.x - 20 && pos.x <= f.x + handleSize && pos.y >= f.y - 20 && pos.y <= f.y + handleSize) {
+                if (pos.x >= f.x - touchPad && pos.x <= f.x + handleSize && pos.y >= f.y - touchPad && pos.y <= f.y + handleSize) {
                     hitIndex = activeImageIndex;
                     handleType = 'tl';
                 }
                 // TR Resize
-                else if (pos.x >= f.x + f.w - handleSize && pos.x <= f.x + f.w + 20 && pos.y >= f.y - 20 && pos.y <= f.y + handleSize) {
+                else if (pos.x >= f.x + f.w - handleSize && pos.x <= f.x + f.w + touchPad && pos.y >= f.y - touchPad && pos.y <= f.y + handleSize) {
                     hitIndex = activeImageIndex;
                     handleType = 'tr';
                 }
                 // BL Resize
-                else if (pos.x >= f.x - 20 && pos.x <= f.x + handleSize && pos.y >= f.y + f.h - handleSize && pos.y <= f.y + f.h + 20) {
+                else if (pos.x >= f.x - touchPad && pos.x <= f.x + handleSize && pos.y >= f.y + f.h - handleSize && pos.y <= f.y + f.h + touchPad) {
                     hitIndex = activeImageIndex;
                     handleType = 'bl';
                 }
                 // BR Resize
-                else if (pos.x >= f.x + f.w - handleSize && pos.x <= f.x + f.w + 20 && pos.y >= f.y + f.h - handleSize && pos.y <= f.y + f.h + 20) {
+                else if (pos.x >= f.x + f.w - handleSize && pos.x <= f.x + f.w + touchPad && pos.y >= f.y + f.h - handleSize && pos.y <= f.y + f.h + touchPad) {
                     hitIndex = activeImageIndex;
                     handleType = 'br';
                 }
@@ -2772,6 +2841,35 @@
                 // Resize Bottom Right - Maintain Aspect
                 let newW = interactionState.origW + dx;
                 if (newW < 50) newW = 50;
+                
+                // Snap Width to other images/canvas edges
+                const dim = getLogicalDimensions();
+                const snapThreshold = Math.max(10, Math.min(50, dim.w * 0.015));
+                const currentRight = interactionState.origX + newW;
+                
+                // Collect X targets
+                const targetsX = [0, dim.w/2, dim.w];
+                selectedImages.forEach((item, idx) => {
+                    if(idx === activeImageIndex) return;
+                    targetsX.push(item.free.x, item.free.x + item.free.w/2, item.free.x + item.free.w);
+                });
+                
+                let snappedXVal = null;
+                let minDelta = snapThreshold;
+                
+                targetsX.forEach(t => {
+                    if (Math.abs(t - currentRight) < minDelta) {
+                        minDelta = Math.abs(t - currentRight);
+                        snappedXVal = t;
+                    }
+                });
+                
+                if (snappedXVal !== null) {
+                    newW = snappedXVal - interactionState.origX;
+                    if (newW < 50) newW = 50; // Re-clamp
+                    snapGuides.push({ type: 'v', pos: snappedXVal });
+                }
+
                 let newH = newW / interactionState.aspect;
                 img.free.w = newW;
                 img.free.h = newH;
@@ -2785,6 +2883,34 @@
                 // Mouse moving right increases width
                 let newW = interactionState.origW + dx;
                 if (newW < 50) newW = 50;
+                
+                // Snap Width (Right Edge)
+                const dim = getLogicalDimensions();
+                const snapThreshold = Math.max(10, Math.min(50, dim.w * 0.015));
+                const currentRight = interactionState.origX + newW;
+                
+                const targetsX = [0, dim.w/2, dim.w];
+                selectedImages.forEach((item, idx) => {
+                    if(idx === activeImageIndex) return;
+                    targetsX.push(item.free.x, item.free.x + item.free.w/2, item.free.x + item.free.w);
+                });
+                
+                let snappedXVal = null;
+                let minDelta = snapThreshold;
+                
+                targetsX.forEach(t => {
+                    if (Math.abs(t - currentRight) < minDelta) {
+                        minDelta = Math.abs(t - currentRight);
+                        snappedXVal = t;
+                    }
+                });
+                
+                if (snappedXVal !== null) {
+                    newW = snappedXVal - interactionState.origX;
+                    if (newW < 50) newW = 50;
+                    snapGuides.push({ type: 'v', pos: snappedXVal });
+                }
+
                 let newH = newW / interactionState.aspect;
                 
                 // Anchor is Bottom-Left (x, y+h)
@@ -2803,6 +2929,38 @@
                 
                 let newW = (trX - pos.x);
                 if (newW < 50) newW = 50;
+                
+                // Snap Width (Left Edge)
+                // Left Edge = trX - newW
+                // We want Left Edge to match target
+                const dim = getLogicalDimensions();
+                const snapThreshold = Math.max(10, Math.min(50, dim.w * 0.015));
+                const currentLeft = trX - newW;
+                
+                const targetsX = [0, dim.w/2, dim.w];
+                selectedImages.forEach((item, idx) => {
+                    if(idx === activeImageIndex) return;
+                    targetsX.push(item.free.x, item.free.x + item.free.w/2, item.free.x + item.free.w);
+                });
+                
+                let snappedXVal = null;
+                let minDelta = snapThreshold;
+                
+                targetsX.forEach(t => {
+                    if (Math.abs(t - currentLeft) < minDelta) {
+                        minDelta = Math.abs(t - currentLeft);
+                        snappedXVal = t;
+                    }
+                });
+                
+                if (snappedXVal !== null) {
+                    // currentLeft should be snappedXVal
+                    // trX - newW = snappedXVal => newW = trX - snappedXVal
+                    newW = trX - snappedXVal;
+                    if (newW < 50) newW = 50;
+                    snapGuides.push({ type: 'v', pos: snappedXVal });
+                }
+
                 let newH = newW / interactionState.aspect;
                 
                 img.free.x = trX - newW;
@@ -2816,6 +2974,34 @@
                 
                 let newW = (brX - pos.x);
                 if(newW < 50) newW = 50;
+                
+                // Snap Width (Left Edge)
+                const dim = getLogicalDimensions();
+                const snapThreshold = Math.max(10, Math.min(50, dim.w * 0.015));
+                const currentLeft = brX - newW;
+                
+                const targetsX = [0, dim.w/2, dim.w];
+                selectedImages.forEach((item, idx) => {
+                    if(idx === activeImageIndex) return;
+                    targetsX.push(item.free.x, item.free.x + item.free.w/2, item.free.x + item.free.w);
+                });
+                
+                let snappedXVal = null;
+                let minDelta = snapThreshold;
+                
+                targetsX.forEach(t => {
+                    if (Math.abs(t - currentLeft) < minDelta) {
+                        minDelta = Math.abs(t - currentLeft);
+                        snappedXVal = t;
+                    }
+                });
+                
+                if (snappedXVal !== null) {
+                    newW = brX - snappedXVal;
+                    if (newW < 50) newW = 50;
+                    snapGuides.push({ type: 'v', pos: snappedXVal });
+                }
+
                 let newH = newW / interactionState.aspect;
                 
                 img.free.x = brX - newW;
@@ -3293,10 +3479,10 @@
             el.style.setProperty('bottom', '0', 'important');
             el.style.setProperty('width', 'auto', 'important');
             el.style.setProperty('height', 'auto', 'important');
-            // Blur effect background - Removed for performance
-            el.style.setProperty('background-color', 'rgba(0,0,0,0.7)', 'important');
-            // el.style.setProperty('backdrop-filter', 'blur(10px)', 'important');
-            // el.style.setProperty('-webkit-backdrop-filter', 'blur(10px)', 'important');
+            // Blur effect background
+            el.style.setProperty('background-color', 'rgba(0,0,0,0.2)', 'important');
+            el.style.setProperty('backdrop-filter', 'blur(15px)', 'important');
+            el.style.setProperty('-webkit-backdrop-filter', 'blur(15px)', 'important');
             
             el.style.setProperty('z-index', '2147483647', 'important');
             el.style.setProperty('flex-direction', 'column', 'important');
